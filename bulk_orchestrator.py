@@ -1,8 +1,9 @@
 import json
 import sys
+import os
 import time
 import hashlib
-import random
+import glob
 from miner import mine_target
 from veritas_build import create_veritas_claim
 from transit_evaluator import evaluate_transit_data
