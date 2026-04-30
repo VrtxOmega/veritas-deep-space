@@ -75,7 +75,7 @@ CORS(app, resources={r"/api/*": {"origins": ["http://localhost:5173", "http://12
 
 @app.route('/api/health')
 def health():
-    return jsonify({"status": "online", "engine": "VERITAS Deep Space Discovery Engine v2.1.0"})
+    return jsonify({"status": "online", "engine": "VERITAS Deep Space Discovery Engine v3.0.0"})
 
 @app.route('/api/candidates')
 def get_candidates():
@@ -299,7 +299,7 @@ def serve_plot(filename):
     return send_from_directory(plots_dir, filename)
 
 if __name__ == "__main__":
-    print(" === VERITAS Deep Space Discovery Engine v2.1.0 ===")
+    print(" === VERITAS Deep Space Discovery Engine v3.0.0 ===")
     print(f" Database: {DB_PATH}")
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()

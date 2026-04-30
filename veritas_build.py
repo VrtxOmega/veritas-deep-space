@@ -167,7 +167,7 @@ def create_veritas_claim(detection_results):
             "depth": depth_val,
             "period": period_val
         }, sort_keys=True).encode()).hexdigest(),
-        "version": "2.1.0",
+        "version": "3.0.0",
         "commit": get_git_commit(),
         "project": "Exoplanet_Discovery_Engine",
         "primitives": primitives,

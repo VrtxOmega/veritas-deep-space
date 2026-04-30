@@ -84,7 +84,7 @@ def run_bulk_scan():
     """
     
     yield {"type": "info", "message": "============================================="}
-    yield {"type": "info", "message": " VERITAS DEEP SPACE DISCOVERY ENGINE v2.0.0 "}
+    yield {"type": "info", "message": " VERITAS DEEP SPACE DISCOVERY ENGINE v3.0.0 "}
     yield {"type": "info", "message": "============================================="}
     
     # Load the confirmed planet host exclusion list

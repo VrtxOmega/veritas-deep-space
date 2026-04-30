@@ -1,6 +1,7 @@
 import requests
 import json
 import sys
+import os
 
 def evaluate_transit_data(data, stellar_context=None):
     """Evaluate transit data with optional SIMBAD stellar context."""
@@ -43,7 +44,6 @@ def evaluate_transit_data(data, stellar_context=None):
     bls_period = data.get('period_days', 0)
     rotation_period = data.get('stellar_rotation_period_days', None)
     if bls_period > 0 and rotation_period is not None and rotation_period > 0:
-        # Check harmonics: 1x, 2x, 0.5x, 3x, 1/3x
         harmonics = [
             (1.0, "1:1 fundamental"),
             (2.0, "2:1 harmonic"),
@@ -55,7 +55,7 @@ def evaluate_transit_data(data, stellar_context=None):
             harmonic_period = rotation_period * multiplier
             if harmonic_period > 0:
                 ratio = abs(bls_period - harmonic_period) / harmonic_period
-                if ratio <= 0.05:  # ±5% tolerance
+                if ratio <= 0.05:
                     return (
                         f"DETERMINISTIC GATE: Harmonic contamination detected. "
                         f"BLS period ({bls_period:.4f}d) is within ±5% of stellar rotation "
@@ -104,36 +104,69 @@ DECISION CRITERIA (deterministic):
 RESPONSE FORMAT:
 Provide your output in JSON format with exactly two keys: "reasoning" (containing your 3-5 sentences of analysis) and "verdict" (which MUST be exactly "PASS", "MODEL_BOUND", or "INCONCLUSIVE").
 Parse your own reasoning before emitting the verdict."""
+
+    # === OLLAMA CLOUD ORACLE (OpenAI-compatible endpoint) ===
+    api_key = os.environ.get("OLLAMA_API_KEY", "")
+    if not api_key:
+        return (
+            "DETERMINISTIC GATE: OLLAMA_API_KEY not set in environment. "
+            "Oracle inference requires Ollama Cloud authentication.\n\n"
+            "[VERDICT: INCONCLUSIVE]"
+        )
     
-    url = "http://localhost:11434/api/generate"
+    oracle_model = os.environ.get("VERITAS_ORACLE_MODEL", "deepseek-v4-flash")
+    url = "https://ollama.com/v1/chat/completions"
+    
     payload = {
-        "model": "qwen2.5:7b",
-        "prompt": prompt,
-        "stream": False,
-        "format": {
-            "type": "object",
-            "properties": {
-                "reasoning": {"type": "string"},
-                "verdict": {"type": "string", "enum": ["PASS", "MODEL_BOUND", "INCONCLUSIVE"]}
-            },
-            "required": ["reasoning", "verdict"]
-        },
-        "options": {
-            "num_predict": -1,
-            "temperature": 0.1
-        }
+        "model": oracle_model,
+        "messages": [
+            {"role": "system", "content": "You are a helpful, direct assistant. Answer questions thoroughly and accurately without unnecessary disclaimers."},
+            {"role": "user", "content": prompt}
+        ],
+        "temperature": 0.1,
+        "stream": False
+    }
+    
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
     }
 
     try:
-        response = requests.post(url, json=payload, timeout=50)
+        response = requests.post(url, json=payload, headers=headers, timeout=120)
         result = response.json()
+        
+        if "error" in result:
+            return (
+                f"DETERMINISTIC GATE: Ollama Cloud API error: {result['error'].get('message', str(result['error']))}\n\n"
+                f"[VERDICT: INCONCLUSIVE]"
+            )
+        
+        content = result.get("choices", [{}])[0].get("message", {}).get("content", "")
+        if not content:
+            finish_reason = result.get("choices", [{}])[0].get("finish_reason", "unknown")
+            return (
+                f"DETERMINISTIC GATE: Ollama Cloud returned empty response (finish_reason={finish_reason}).\n\n"
+                f"[VERDICT: INCONCLUSIVE]"
+            )
+        
         try:
-            parsed = json.loads(result["response"])
+            parsed = json.loads(content)
             return f"{parsed.get('reasoning', '')}\n\n[VERDICT: {parsed.get('verdict', 'INCONCLUSIVE').upper()}]"
-        except Exception:
-            return result["response"]
+        except json.JSONDecodeError:
+            # The model may return reasoning text without JSON structure
+            return content
+            
+    except requests.Timeout:
+        return (
+            "DETERMINISTIC GATE: Ollama Cloud request timed out (120s).\n\n"
+            "[VERDICT: INCONCLUSIVE]"
+        )
     except Exception as e:
-        return f"Oracle Connection Failed: {e}"
+        return (
+            f"DETERMINISTIC GATE: Oracle inference failed: {str(e)[:200]}\n\n"
+            f"[VERDICT: INCONCLUSIVE]"
+        )
 
 def evaluate_transit(candidate_file="candidate_anomaly.json"):
     try:
