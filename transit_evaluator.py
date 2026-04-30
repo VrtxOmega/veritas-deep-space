@@ -16,10 +16,10 @@ def evaluate_transit_data(data, stellar_context=None):
     # Gate 1: Morphology ratio — baseline noise rivals transit depth
     if depth > 0 and flux_std > 0:
         morphology_ratio = flux_std / depth
-        if morphology_ratio > 0.5:
+        if morphology_ratio > 2.0:
             return (
-                f"DETERMINISTIC GATE: flux_std/depth = {morphology_ratio:.3f} > 0.5 threshold. "
-                f"Baseline noise ({flux_std:.6f}) rivals transit depth ({depth:.6f}). "
+                f"DETERMINISTIC GATE: flux_std/depth = {morphology_ratio:.3f} > 2.0 threshold. "
+                f"Baseline noise ({flux_std:.6f}) overwhelms transit depth ({depth:.6f}). "
                 f"Signal is indistinguishable from stellar variability or contact binary.\n\n"
                 f"[VERDICT: MODEL_BOUND]"
             )
@@ -33,9 +33,9 @@ def evaluate_transit_data(data, stellar_context=None):
         )
     
     # Gate 3: Insufficient SNR
-    if snr <= 5.0:
+    if snr <= 3.0:
         return (
-            f"DETERMINISTIC GATE: SNR = {snr:.2f} <= 5.0. "
+            f"DETERMINISTIC GATE: SNR = {snr:.2f} <= 3.0. "
             f"Signal below minimum statistical significance threshold.\n\n"
             f"[VERDICT: INCONCLUSIVE]"
         )

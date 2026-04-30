@@ -92,29 +92,35 @@ def run_bulk_scan():
     known_hosts = load_known_hosts()
     yield {"type": "info", "message": f"[*] {len(known_hosts)} confirmed host stars loaded."}
     
-    # Phase 1: Build target pool with bulk MAST queries
-    yield {"type": "info", "message": "[*] Phase 1: Building target pool from MAST catalog..."}
-    yield {"type": "info", "message": "[*] This queries multiple sky sectors in batch (much faster than per-target)..."}
+    # Phase 0: Bootstrap target pool from cached plots (skip slow MAST API)
+    yield {"type": "info", "message": "[*] Phase 0: Bootstrapping target pool from cached data..."}
     
-    try:
-        pool = fetch_target_pool()
-    except Exception as e:
-        yield {"type": "info", "message": f"[!] Pool fetch error: {str(e)[:100]}"}
-        pool = []
+    pool = []
     
-    if not pool:
-        yield {"type": "info", "message": "[!] No targets found in pool. Trying direct catalog search..."}
-        # Fallback: search for specific well-observed targets by name
-        import lightkurve as lk
-        fallback_targets = []
-        try:
-            sr = lk.search_lightcurve("KIC", radius=300, author="Kepler")
-            if len(sr) > 0:
-                for r in sr:
-                    fallback_targets.append({"name": str(r.target_name), "source": "Kepler", "ra": 0, "dec": 0})
-        except Exception:
-            pass
-        pool = fallback_targets
+    import glob
+    existing_plots = glob.glob("plots/*.png")
+    cached_targets = set()
+    for plot_path in existing_plots:
+        basename = os.path.basename(plot_path).replace(".png", "")
+        parts = basename.split("_")
+        if len(parts) >= 2 and parts[0] == "KIC":
+            target_name = f"KIC {parts[1]}"
+        elif basename.startswith("Kepler-"):
+            target_name = basename
+        else:
+            target_name = basename.replace("_", " ")
+        cached_targets.add(target_name)
+    
+    yield {"type": "info", "message": f"[*] Found {len(cached_targets)} cached targets in plots/"}
+    
+    for t in sorted(cached_targets):
+        pool.append({"name": t, "source": "Kepler", "ra": 0, "dec": 0})
+    
+    # Add high-value Kepler targets that may not have been scanned
+    high_value = ["Kepler-10", "Kepler-22", "Kepler-186", "Kepler-90", "Kepler-16b", "Kepler-62"]
+    for name in high_value:
+        if name not in cached_targets:
+            pool.append({"name": name, "source": "Kepler", "ra": 0, "dec": 0})
     
     yield {"type": "info", "message": f"[*] Target pool: {len(pool)} candidates ready for analysis"}
     
@@ -185,12 +191,25 @@ def run_bulk_scan():
             yield {"type": "info", "message": f"[-] Claim build failed: {str(e)}"}
             continue
             
-        # Evaluate with AI Oracle
-        yield {"type": "info", "message": "[+] Engaging Oracle (qwen2.5:7b)..."}
+        # Evaluate with AI Oracle (with SIMBAD enrichment)
+        yield {"type": "info", "message": "[+] Engaging VERITAS Oracle (dual-provider: Anthropic/Ollama Cloud)..."}
         yield {"type": "status", "target": target, "state": "evaluating"}
         
+        # SIMBAD enrichment — inject stellar context into Oracle
+        stellar_context = None
+        ra = results.get('ra')
+        dec = results.get('dec')
+        if ra is not None and dec is not None:
+            try:
+                from simbad_lookup import enrich_candidate, format_for_oracle
+                simbad_data = enrich_candidate(ra, dec)
+                stellar_context = format_for_oracle(simbad_data)
+                yield {"type": "info", "message": f"    SIMBAD: {simbad_data.get('primary_id', 'no match')} | {simbad_data.get('spectral_type', '?')}"}
+            except Exception as e:
+                yield {"type": "info", "message": f"    SIMBAD lookup: {str(e)[:80]}"}
+        
         try:
-            verdict_text = evaluate_transit_data(results)
+            verdict_text = evaluate_transit_data(results, stellar_context=stellar_context)
         except Exception as e:
             verdict_text = f"[VERDICT: INCONCLUSIVE] Oracle error: {str(e)}"
             
