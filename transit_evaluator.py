@@ -105,68 +105,83 @@ RESPONSE FORMAT:
 Provide your output in JSON format with exactly two keys: "reasoning" (containing your 3-5 sentences of analysis) and "verdict" (which MUST be exactly "PASS", "MODEL_BOUND", or "INCONCLUSIVE").
 Parse your own reasoning before emitting the verdict."""
 
-    # === OLLAMA CLOUD ORACLE (OpenAI-compatible endpoint) ===
-    api_key = os.environ.get("OLLAMA_API_KEY", "")
-    if not api_key:
-        return (
-            "DETERMINISTIC GATE: OLLAMA_API_KEY not set in environment. "
-            "Oracle inference requires Ollama Cloud authentication.\n\n"
-            "[VERDICT: INCONCLUSIVE]"
-        )
+    # === DUAL-PROVIDER ORACLE ===
+    # Primary:   VibeToken Anthropic proxy (Claude Sonnet/Opus — won credits)
+    # Fallback:  Ollama Cloud (DeepSeek-V4 — always available)
+    # Both use OpenAI-compatible /v1/chat/completions endpoint.
     
-    oracle_model = os.environ.get("VERITAS_ORACLE_MODEL", "deepseek-v4-flash")
-    url = "https://ollama.com/v1/chat/completions"
+    providers = [
+        {
+            "name": "VibeToken (Anthropic)",
+            "api_key": os.environ.get("ANTHROPIC_API_KEY", ""),
+            "base_url": os.environ.get("ANTHROPIC_BASE_URL", "https://api.vibetoken.lol"),
+            "model": os.environ.get("VERITAS_ORACLE_MODEL", "claude-sonnet-4-20250514"),
+        },
+        {
+            "name": "Ollama Cloud",
+            "api_key": os.environ.get("OLLAMA_API_KEY", ""),
+            "base_url": "https://ollama.com/v1",
+            "model": os.environ.get("VERITAS_ORACLE_FALLBACK_MODEL", "deepseek-v4-flash"),
+        },
+    ]
     
-    payload = {
-        "model": oracle_model,
-        "messages": [
-            {"role": "system", "content": "You are a helpful, direct assistant. Answer questions thoroughly and accurately without unnecessary disclaimers."},
-            {"role": "user", "content": prompt}
-        ],
-        "temperature": 0.1,
-        "stream": False
-    }
+    last_error = "No providers configured."
     
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    }
-
-    try:
-        response = requests.post(url, json=payload, headers=headers, timeout=120)
-        result = response.json()
+    for provider in providers:
+        if not provider["api_key"]:
+            last_error = f"{provider['name']}: API key not set in environment."
+            continue
         
-        if "error" in result:
-            return (
-                f"DETERMINISTIC GATE: Ollama Cloud API error: {result['error'].get('message', str(result['error']))}\n\n"
-                f"[VERDICT: INCONCLUSIVE]"
-            )
-        
-        content = result.get("choices", [{}])[0].get("message", {}).get("content", "")
-        if not content:
-            finish_reason = result.get("choices", [{}])[0].get("finish_reason", "unknown")
-            return (
-                f"DETERMINISTIC GATE: Ollama Cloud returned empty response (finish_reason={finish_reason}).\n\n"
-                f"[VERDICT: INCONCLUSIVE]"
-            )
+        url = f"{provider['base_url'].rstrip('/')}/chat/completions"
+        payload = {
+            "model": provider["model"],
+            "messages": [
+                {"role": "system", "content": "You are a rigorous astrophysical reasoning system. Respond only with mathematically precise analysis. Never add narrative optimism, defer closure, or speculate beyond the data."},
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": 0.1,
+            "stream": False
+        }
+        headers = {
+            "Authorization": f"Bearer {provider['api_key']}",
+            "Content-Type": "application/json"
+        }
         
         try:
-            parsed = json.loads(content)
-            return f"{parsed.get('reasoning', '')}\n\n[VERDICT: {parsed.get('verdict', 'INCONCLUSIVE').upper()}]"
-        except json.JSONDecodeError:
-            # The model may return reasoning text without JSON structure
-            return content
+            response = requests.post(url, json=payload, headers=headers, timeout=120)
+            result = response.json()
             
-    except requests.Timeout:
-        return (
-            "DETERMINISTIC GATE: Ollama Cloud request timed out (120s).\n\n"
-            "[VERDICT: INCONCLUSIVE]"
-        )
-    except Exception as e:
-        return (
-            f"DETERMINISTIC GATE: Oracle inference failed: {str(e)[:200]}\n\n"
-            f"[VERDICT: INCONCLUSIVE]"
-        )
+            if "error" in result:
+                last_error = f"{provider['name']}: {result['error'].get('message', str(result['error']))}"
+                continue  # Try fallback
+            
+            content = result.get("choices", [{}])[0].get("message", {}).get("content", "")
+            if not content:
+                finish_reason = result.get("choices", [{}])[0].get("finish_reason", "unknown")
+                last_error = f"{provider['name']}: empty response (finish_reason={finish_reason})"
+                continue  # Try fallback
+            
+            # Success — parse and return
+            try:
+                parsed = json.loads(content)
+                provider_note = f"[Oracle: {provider['name']}]"
+                return f"{parsed.get('reasoning', '')}\n\n{provider_note}\n[VERDICT: {parsed.get('verdict', 'INCONCLUSIVE').upper()}]"
+            except json.JSONDecodeError:
+                return f"[Oracle: {provider['name']}]\n{content}"
+                
+        except requests.Timeout:
+            last_error = f"{provider['name']}: request timed out (120s)"
+            continue
+        except Exception as e:
+            last_error = f"{provider['name']}: {str(e)[:200]}"
+            continue
+    
+    # All providers exhausted
+    return (
+        f"DETERMINISTIC GATE: All Oracle providers failed.\\n"
+        f"Primary: {last_error}\\n\\n"
+        f"[VERDICT: INCONCLUSIVE]"
+    )
 
 def evaluate_transit(candidate_file="candidate_anomaly.json"):
     try:
